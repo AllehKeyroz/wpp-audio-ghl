@@ -1,64 +1,62 @@
-# Dockerfile para GHL Robot Dashboard
-
-# -----------------
-# Estágio de Build
-# -----------------
+#
+# Fase 1: Build da aplicação Next.js
+#
 FROM node:20-alpine AS build
 
+# Instala as dependências necessárias para o Playwright no Alpine Linux
+# Apenas o Chromium é necessário
+RUN apk add --no-cache chromium
+
+# Define o diretório de trabalho
 WORKDIR /app
 
-# Instala pnpm
-RUN npm install -g pnpm
+# Copia os arquivos de definição de dependência
+COPY package.json package-lock.json* ./
 
-# Instala as dependências do Playwright para Alpine
-# O comando `playwright install --with-deps` tenta usar 'apt-get', que não existe no Alpine.
-# Por isso, instalamos manualmente as dependências do Chromium com 'apk'.
-RUN apk add --no-cache udev ttf-freefont chromium
+# Instala as dependências
+RUN npm ci
 
-# Copia os arquivos de dependência e instala usando pnpm
-COPY package.json pnpm-lock.yaml ./
-RUN pnpm i
+# Instala os binários do navegador para o Playwright sem dependências de sistema (já instaladas com apk)
+RUN npx playwright install chromium
 
-# Instala os binários do navegador para o Playwright (sem --with-deps)
-RUN pnpm exec playwright install chromium
-
-# Copia o resto do código da aplicação
+# Copia o restante do código da aplicação
 COPY . .
 
-# Constrói a aplicação Next.js
-RUN pnpm build
+# Executa o build da aplicação
+RUN npm run build
 
-# Remove dependências de desenvolvimento para diminuir o tamanho da imagem final
-RUN pnpm prune --prod
-
-
-# -----------------
-# Estágio de Produção
-# -----------------
+#
+# Fase 2: Execução da aplicação
+#
 FROM node:20-alpine AS runner
 
 WORKDIR /app
 
-ENV NODE_ENV=production
+# Cria um usuário e grupo não-root para executar a aplicação
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
 
-# Instala as dependências do Chromium necessárias para a execução
-RUN apk add --no-cache udev ttf-freefont chromium
+# Copia as dependências do Playwright instaladas na fase de build
+COPY --from=build /ms-playwright/ /ms-playwright/
 
-# A imagem base 'alpine' cria um usuário 'node' por padrão.
-# Vamos usar este usuário para executar a aplicação por segurança.
-USER node
+# Copia os arquivos de build da fase anterior
+COPY --from=build /app/.next ./.next
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/public ./public
 
-# Copia os artefatos do estágio de build
-COPY --from=build --chown=node:node /app/node_modules ./node_modules
-COPY --from=build --chown=node:node /app/package.json ./package.json
-COPY --from=build --chown=node:node /app/.next/standalone ./
-COPY --from=build --chown=node:node /app/.next/static ./.next/static
+# Define as permissões corretas para os diretórios
+# O usuário 'nextjs' precisa ter permissão para escrever no diretório temporário
+RUN mkdir -p /tmp/ghl-robot-screenshots && \
+    chown -R nextjs:nodejs /tmp/ghl-robot-screenshots && \
+    chown -R nextjs:nodejs ./.next
 
-# As capturas de tela e sessão são salvas no diretório temporário do sistema (/tmp),
-# que já possui as permissões corretas para o usuário 'node'.
+# Define o usuário não-root para executar a aplicação
+USER nextjs
 
 EXPOSE 3000
 
-ENV PORT=3000
+ENV PORT 3000
 
-CMD ["node", "server.js"]
+# Comando para iniciar a aplicação
+CMD ["npm", "start"]
