@@ -1,20 +1,18 @@
-#
+
 # Fase 1: Build da aplicação Next.js
-#
 FROM node:20-alpine AS build
 
 # Instala as dependências necessárias para o Playwright no Alpine Linux
-# Apenas o Chromium é necessário
-RUN apk add --no-cache chromium
+RUN apk add --no-cache chromium udev ttf-freefont
 
 # Define o diretório de trabalho
 WORKDIR /app
 
 # Copia os arquivos de definição de dependência
-# Usamos * para package-lock.json para funcionar com npm, pnpm, ou yarn
-COPY package.json package-lock.json* ./
+COPY package.json ./
+COPY package-lock.json ./
 
-# Instala as dependências de forma "limpa" a partir do lockfile
+# Instala as dependências
 RUN npm ci
 
 # Instala os binários do navegador para o Playwright sem dependências de sistema (já instaladas com apk)
@@ -44,7 +42,6 @@ COPY --from=build /ms-playwright/ /ms-playwright/
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
-COPY --from=build /app/public ./public
 
 # Define as permissões corretas para os diretórios
 # O usuário 'nextjs' precisa ter permissão para escrever no diretório temporário
@@ -57,7 +54,7 @@ USER nextjs
 
 EXPOSE 3000
 
-ENV PORT 3000
+ENV PORT=3000
 
 # Comando para iniciar a aplicação
 CMD ["npm", "start"]
