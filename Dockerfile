@@ -1,75 +1,56 @@
-#
-# Fase 1: Build da aplicação (Builder)
-#
-FROM node:20-bookworm-slim AS builder
+# Usamos uma imagem base completa do Debian (Bookworm) com Node.js 20.
+# Isso garante a compatibilidade com todas as dependências do Playwright.
+FROM node:20-bookworm
 
-# Define o diretório de trabalho
+# Define o diretório de trabalho dentro do contêiner.
 WORKDIR /app
 
-# Instala as dependências necessárias para `better-sqlite3` e `playwright`
-# A flag --no-install-recommends evita a instalação de pacotes desnecessários
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends build-essential python3 && \
-    rm -rf /var/lib/apt/lists/*
-
-# Copia os arquivos de definição de dependência
-COPY package.json package-lock.json* ./
-
-# Instala as dependências de produção primeiro
-RUN npm ci --omit=dev
-
-# Instala as dependências de desenvolvimento (necessárias para o build)
-COPY . .
-RUN npm install
-
-# Executa o build de produção
-RUN npm run build
-
-# Remove as dependências de desenvolvimento para diminuir o tamanho da imagem final
-RUN npm prune --omit=dev
-
-
-#
-# Fase 2: Execução da aplicação (Runner)
-#
-FROM node:20-bookworm-slim AS runner
-
-WORKDIR /app
-
-# Cria um usuário e grupo não-root para executar a aplicação
-# Sintaxe para Debian (addgroup/adduser)
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 --ingroup nodejs nextjs
-
-# Instala as dependências de sistema para o Chromium rodar
-# Isso é mais leve do que copiar todo o diretório do Playwright
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    chromium \
+# Atualiza os pacotes e instala as dependências do sistema necessárias para o Playwright/Chromium.
+RUN apt-get update && apt-get install -y \
+    # Dependências do Chromium
+    libgbm1 \
+    libnss3 \
+    libasound2 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libexpat1 \
+    libx11-6 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxrandr2 \
+    libxtst6 \
+    # Dependências para compilar `better-sqlite3`
+    build-essential \
+    python3 \
+    # Limpa o cache do apt para manter a imagem menor.
     && rm -rf /var/lib/apt/lists/*
 
-# Copia os artefatos da fase de build
-COPY --from=builder /app/.next ./.next
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/package.json ./package.json
+# Copia os arquivos de definição de dependência.
+COPY package.json package-lock.json* ./
 
-# Cria o diretório para o banco de dados e define as permissões
-# O usuário 'nextjs' precisa ter permissão para escrever neste diretório
-RUN mkdir -p /app/db && \
-    chown -R nextjs:nodejs /app/db
+# Instala as dependências do projeto a partir do package-lock.json.
+RUN npm ci
 
-# Define as permissões para o diretório .next
-RUN chown -R nextjs:nodejs ./.next
+# Instala o navegador Chromium para o Playwright.
+# O Playwright saberá onde encontrá-lo, pois é instalado no mesmo ambiente.
+RUN npx playwright install chromium
 
-# Define o usuário não-root para executar a aplicação
-USER nextjs
+# Copia todo o restante do código da aplicação para o diretório de trabalho.
+COPY . .
 
+# Executa o build de produção do Next.js.
+RUN npm run build
+
+# Expõe a porta que o Next.js usará.
 EXPOSE 3000
 
+# Define a porta como variável de ambiente.
 ENV PORT 3000
-ENV NODE_ENV production
-# Aponta para o executável do Chromium instalado via apt-get
-ENV PLAYWRIGHT_BROWSERS_PATH=/usr/bin
 
-# Comando para iniciar a aplicação
+# O comando para iniciar a aplicação em modo de produção.
 CMD ["npm", "start"]
