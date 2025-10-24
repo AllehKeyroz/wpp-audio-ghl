@@ -1,94 +1,87 @@
 #
-# Fase 1: Instalação das dependências e Build da Aplicação
+# Fase 1: Build (Builder)
 #
-FROM node:20-bookworm AS deps
+FROM node:20-bookworm-slim AS builder
 
-# Instala as dependências de sistema necessárias para o Playwright rodar o Chromium
-# A flag --with-deps tentaria fazer isso, mas fazer manualmente é mais explícito e confiável.
-RUN apt-get update && apt-get install -y \
-    ca-certificates \
-    fonts-liberation \
+# Instala o build-essential para compilar dependências nativas como o better-sqlite3
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+# Executa o build de produção
+RUN npm run build
+
+#
+# Fase 2: Produção (Runner)
+#
+FROM node:20-bookworm-slim AS runner
+
+WORKDIR /app
+
+# Cria um usuário e grupo não-root para executar a aplicação
+RUN addgroup -g 1001 -S nodejs
+RUN adduser -S nextjs -u 1001
+
+# Instala as dependências do sistema necessárias para o Playwright (navegador)
+# Mesmo que o navegador seja copiado, as libs do sistema são necessárias
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # Dependências do Playwright
     libasound2 \
     libatk-bridge2.0-0 \
     libatk1.0-0 \
     libcairo2 \
     libcups2 \
     libdbus-1-3 \
+    libdrm2 \
     libexpat1 \
-    libfontconfig1 \
     libgbm1 \
-    libgcc1 \
+    libgdk-pixbuf-2.0-0 \
     libglib2.0-0 \
-    libgdk-pixbuf2.0-0 \
     libgtk-3-0 \
     libnspr4 \
     libnss3 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
-    libstdc++6 \
     libx11-6 \
     libx11-xcb1 \
     libxcb1 \
     libxcomposite1 \
-    libxcursor1 \
     libxdamage1 \
     libxext6 \
     libxfixes3 \
-    libxi6 \
     libxrandr2 \
-    libxrender1 \
-    libxss1 \
     libxtst6 \
+    # Outras dependências úteis
+    ca-certificates \
+    fonts-liberation \
     lsb-release \
-    wget \
     xdg-utils \
-    --no-install-recommends
+    wget \
+    && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# Copia os arquivos de manifesto de dependência e instala
-COPY package.json package-lock.json* ./
-RUN npm ci
-
-#
-# Fase 2: Build da Aplicação
-#
-FROM node:20-bookworm AS builder
-WORKDIR /app
-
-# Copia as dependências da fase anterior
-COPY --from=deps /app/node_modules ./node_modules
-COPY . .
-
-# Instala os navegadores do Playwright. Não usamos --with-deps porque já instalamos na fase anterior.
-RUN npx playwright install --with-deps chromium
-
-# Executa o build de produção
-RUN npm run build
-
-#
-# Fase 3: Imagem Final de Produção
-#
-FROM node:20-bookworm AS runner
-WORKDIR /app
-
-ENV NODE_ENV=production
-
-# Cria um usuário e grupo não-root para segurança
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
-
-# Copia os artefatos da fase de build
-COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/public ./public
-COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
+# Copia os arquivos de build da fase anterior
+COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/package.json ./package.json
 
-# Define o usuário para executar a aplicação
+# Cria o diretório para o banco de dados e define permissões
+RUN mkdir -p /app/db && \
+    chown -R nextjs:nodejs /app/db
+
+# Muda para o usuário não-root
 USER nextjs
 
 EXPOSE 3000
-
 ENV PORT 3000
+ENV NODE_ENV=production
 
+# Comando para iniciar a aplicação
 CMD ["npm", "start"]

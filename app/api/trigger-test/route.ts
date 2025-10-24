@@ -22,13 +22,13 @@ import { processAndForwardAttachment, addLog, WebhookPayload } from '@/lib/servi
 export async function POST(request: Request) {
   try {
     const payload: WebhookPayload = await request.json();
-    const { locationId, conversationId, messageId } = payload;
+    const { ghlEmail, locationId, conversationId, messageId } = payload;
 
-    if (!locationId || !conversationId || !messageId) {
+    if (!ghlEmail || !locationId || !conversationId || !messageId) {
       return NextResponse.json({ error: 'Invalid payload. Missing required fields.' }, { status: 400 });
     }
 
-    addLog(`Manual test triggered for messageId: ${messageId}.`);
+    addLog(`Manual test triggered for messageId: ${messageId} by user ${ghlEmail}.`);
 
     // Trigger the process asynchronously, just like the real webhook
     processAndForwardAttachment(payload).catch(error => {

@@ -81,6 +81,8 @@ export default function HomePage() {
   const [statusMessage, setStatusMessage] = useState({ message: '', type: '' });
   const [loginFlowState, setLoginFlowState] = useState<LoginFlowState>('Idle');
 
+  const email = config.ghlEmail; // Use email as the user identifier
+
   // --- API Call Functions ---
   const updateStatusMessage = (message: string, type: 'success' | 'error') => {
     setStatusMessage({ message, type });
@@ -88,8 +90,12 @@ export default function HomePage() {
   };
 
   const fetchSessionStatus = useCallback(async () => {
+    if (!email) {
+      setSessionStatus('Unknown');
+      return;
+    }
     try {
-      const res = await fetch('/api/status');
+      const res = await fetch(`/api/status?email=${encodeURIComponent(email)}`);
       if (res.ok) {
         const data = await res.json();
         setSessionStatus(data.status);
@@ -99,12 +105,18 @@ export default function HomePage() {
     } catch (e) {
       setSessionStatus('Unknown');
     }
-  }, []);
+  }, [email]);
 
   const fetchConfig = async () => {
+    if (!email) return;
     try {
-      const res = await fetch('/api/config');
-      if (res.ok) setConfig(await res.json());
+      const res = await fetch(`/api/config?email=${encodeURIComponent(email)}`);
+      if (res.ok) {
+        const savedConfig = await res.json();
+        setConfig({ ...config, ...savedConfig });
+      } else if (res.status === 404) {
+        updateStatusMessage('Nenhuma configuração encontrada para este email. Salve uma nova.', 'error');
+      }
     } catch (e) { updateStatusMessage('Falha ao buscar configuração', 'error'); }
   };
 
@@ -117,8 +129,9 @@ export default function HomePage() {
   };
 
   const fetchLoginStatus = async () => {
+    if (!email) return;
     try {
-        const res = await fetch('/api/login-status');
+        const res = await fetch(`/api/login-status?email=${encodeURIComponent(email)}`);
         if (res.ok) {
             const data = await res.json();
             setLoginFlowState(data.flowState);
@@ -130,29 +143,38 @@ export default function HomePage() {
 
   const handleSaveConfig = async (e: FormEvent) => {
     e.preventDefault();
+    if (!email) {
+        updateStatusMessage('O Email GHL é obrigatório para salvar.', 'error');
+        return;
+    }
     setIsLoading({ ...isLoading, config: true });
     try {
       const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) });
-      if (res.ok) updateStatusMessage('Configuração salva com sucesso!', 'success');
+      if (res.ok) {
+        updateStatusMessage('Configuração salva com sucesso!', 'success');
+        fetchSessionStatus();
+      }
       else throw new Error(await res.text());
     } catch (error: any) { updateStatusMessage(`Erro ao salvar configuração: ${error.message}`, 'error');
     } finally { setIsLoading({ ...isLoading, config: false }); }
   };
 
   const handleLogin = async () => {
+    if (!email) {
+        updateStatusMessage('O Email GHL é obrigatório para fazer login.', 'error');
+        return;
+    }
     setIsLoading({ ...isLoading, login: true });
     updateStatusMessage('Iniciando processo de login... Isso pode levar um momento.', 'success');
-    // We don't handle the full promise here as the backend will run in the background
-    fetch('/api/login', { method: 'POST' }).catch(e => {
+    fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }).catch(e => {
         updateStatusMessage(`Falha no login: ${e.message}`, 'error');
     });
-    // UI will update based on polling the login status
   };
   
   const handleOtpSubmit = async (otp: string) => {
     setIsLoading({ ...isLoading, otp: true });
     try {
-        const res = await fetch('/api/submit-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ otp }) });
+        const res = await fetch('/api/submit-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ otp, email }) });
         if (!res.ok) throw new Error((await res.json()).error || 'Falha ao enviar OTP');
         updateStatusMessage('OTP Enviado. Finalizando login...', 'success');
     } catch (error: any) {
@@ -166,7 +188,7 @@ export default function HomePage() {
     setIsLoading({ ...isLoading, otp: true }); // Use otp loading for resend as well
     updateStatusMessage('Solicitando reenvio do OTP...', 'success');
     try {
-        const res = await fetch('/api/resend-otp', { method: 'POST' });
+        const res = await fetch('/api/resend-otp', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
         if (!res.ok) throw new Error((await res.json()).error || 'Falha ao reenviar OTP');
         updateStatusMessage('OTP reenviado. Verifique seu e-mail.', 'success');
     } catch (error: any) {
@@ -177,9 +199,13 @@ export default function HomePage() {
   };
 
   const handleDeleteSession = async () => {
+    if (!email) {
+        updateStatusMessage('O Email GHL é obrigatório para excluir a sessão.', 'error');
+        return;
+    }
     setIsLoading({ ...isLoading, deleteSession: true });
     try {
-      const res = await fetch('/api/login', { method: 'DELETE' });
+      const res = await fetch('/api/login', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
       if (!res.ok) throw new Error((await res.json()).error || 'Erro desconhecido');
       updateStatusMessage('Arquivo de sessão excluído com sucesso.', 'success');
       fetchSessionStatus(); // Refresh status
@@ -189,9 +215,14 @@ export default function HomePage() {
 
   const handleTest = async (e: FormEvent) => {
     e.preventDefault();
+    if (!email) {
+        updateStatusMessage('O Email GHL é obrigatório para acionar um teste.', 'error');
+        return;
+    }
     setIsLoading({ ...isLoading, test: true });
     try {
-      const res = await fetch('/api/trigger-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(testPayload) });
+      const payload = { ...testPayload, ghlEmail: email };
+      const res = await fetch('/api/trigger-test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       if (res.ok) updateStatusMessage('Teste acionado! Verifique os logs para o progresso.', 'success');
       else throw new Error(await res.text());
     } catch (error: any) { updateStatusMessage(`Erro ao acionar teste: ${error.message}`, 'error');
@@ -208,7 +239,6 @@ export default function HomePage() {
 
   // --- Effects ---
   useEffect(() => {
-    fetchConfig();
     fetchSessionStatus();
     const logInterval = setInterval(fetchLogs, 3000);
     const statusInterval = setInterval(fetchSessionStatus, 30000); // Check session status every 30 seconds
@@ -219,13 +249,13 @@ export default function HomePage() {
       clearInterval(statusInterval);
       clearInterval(loginStatusInterval);
     };
-  }, [fetchSessionStatus]);
+  }, [fetchSessionStatus, email]);
 
   useEffect(() => {
     if (loginFlowState === 'InProgress' || loginFlowState === 'AwaitingOTP') {
-        setIsLoading({ ...isLoading, login: true });
+        setIsLoading(prev => ({ ...prev, login: true }));
     } else {
-        setIsLoading({ ...isLoading, login: false });
+        setIsLoading(prev => ({ ...prev, login: false }));
     }
 
     if (loginFlowState === 'Complete') {
@@ -240,7 +270,7 @@ export default function HomePage() {
     }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loginFlowState]);
+  }, [loginFlowState, fetchSessionStatus]);
 
   // --- Render ---
   return (
@@ -262,8 +292,8 @@ export default function HomePage() {
                   <input type="url" value={config.loginUrl} onChange={e => setConfig({ ...config, loginUrl: e.target.value })} className="w-full bg-gray-700 border-gray-600 rounded-md p-2 mt-1 focus:ring-cyan-500 focus:border-cyan-500" />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300">Email GHL</label>
-                  <input type="email" value={config.ghlEmail} onChange={e => setConfig({ ...config, ghlEmail: e.target.value })} className="w-full bg-gray-700 border-gray-600 rounded-md p-2 mt-1 focus:ring-cyan-500 focus:border-cyan-500" />
+                  <label className="block text-sm font-medium text-gray-300">Email GHL (Identificador Único)</label>
+                  <input type="email" value={config.ghlEmail} onBlur={fetchConfig} onChange={e => setConfig({ ...config, ghlEmail: e.target.value })} className="w-full bg-gray-700 border-gray-600 rounded-md p-2 mt-1 focus:ring-cyan-500 focus:border-cyan-500" placeholder="Digite seu email GHL e saia do campo"/>
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-300">Senha GHL</label>
@@ -287,10 +317,10 @@ export default function HomePage() {
               <div className="space-y-4">
                  <p className="text-sm text-gray-400">Primeiro, salve sua configuração. Em seguida, clique aqui para abrir um navegador e resolver o 2FA. Isso cria um arquivo de sessão para automação sem interface.</p>
                 <div className="flex space-x-4">
-                    <button onClick={handleLogin} disabled={isLoading.login} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50">
+                    <button onClick={handleLogin} disabled={isLoading.login || !email} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50">
                         {isLoading.login ? <Spinner /> : 'Realizar Login Inicial'}
                     </button>
-                    <button onClick={handleDeleteSession} disabled={isLoading.deleteSession} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50">
+                    <button onClick={handleDeleteSession} disabled={isLoading.deleteSession || !email} className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50">
                         {isLoading.deleteSession ? <Spinner /> : 'Excluir Sessão'}
                     </button>
                 </div>
