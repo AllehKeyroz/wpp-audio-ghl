@@ -230,6 +230,10 @@ export default function GhlRobotDashboard() {
     });
   };
 
+  const getScreenshotUrl = (filename: string) => {
+    return `/api/screenshots/${filename}`;
+  }
+
   const isInteractive = state.status === "RUNNING" || state.status === "LOGGING_IN" || state.status === "AWAITING_2FA" || state.status === "PROCESSING";
   const currentStatus = statusConfig[state.status] || statusConfig.STOPPED;
 
@@ -371,8 +375,8 @@ export default function GhlRobotDashboard() {
                  {state.screenshot && (
                   <div className="mt-4">
                     <h4 className="font-semibold mb-2">Captura de Tela do Erro:</h4>
-                    <a href={state.screenshot} target="_blank" rel="noopener noreferrer" className="block relative group overflow-hidden rounded-lg border">
-                       <Image src={state.screenshot} alt="Captura de tela do erro" width={600} height={400} className="object-cover w-full transition-transform duration-300 group-hover:scale-105"/>
+                    <a href={getScreenshotUrl(state.screenshot)} target="_blank" rel="noopener noreferrer" className="block relative group overflow-hidden rounded-lg border">
+                       <Image src={getScreenshotUrl(state.screenshot)} alt="Captura de tela do erro" width={600} height={400} className="object-cover w-full transition-transform duration-300 group-hover:scale-105"/>
                        <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                          <div className="flex items-center gap-2 text-white font-semibold">
                            Ver imagem completa <ExternalLink className="h-4 w-4" />

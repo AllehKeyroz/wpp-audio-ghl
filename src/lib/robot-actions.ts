@@ -1,10 +1,11 @@
 import { sync as mkdirpSync } from 'mkdirp';
 import path from 'path';
+import os from 'os';
 import { chromium, type Page, TimeoutError as PlaywrightTimeoutError } from "playwright";
 import { robotState, SESSION_FILE_PATH, type RobotConfig } from "./robot-state";
 import fs from 'fs/promises';
 
-const SCREENSHOTS_DIR = path.join(process.cwd(), 'public', 'screenshots');
+const SCREENSHOTS_DIR = path.join(os.tmpdir(), 'ghl-robot-screenshots');
 mkdirpSync(SCREENSHOTS_DIR);
 
 async function checkSessionFile() {
@@ -66,9 +67,10 @@ export async function performLogin(config: RobotConfig, getAuthCode: () => Promi
     } catch (e) {
         const error = e as Error;
         robotState.addLog(`ERRO de login: ${error.message}`, 'ERROR');
-        const screenshotPath = path.join(SCREENSHOTS_DIR, `login_error_${Date.now()}.png`);
+        const screenshotFilename = `login_error_${Date.now()}.png`;
+        const screenshotPath = path.join(SCREENSHOTS_DIR, screenshotFilename);
         await page.screenshot({ path: screenshotPath });
-        robotState.setScreenshot(`/screenshots/${path.basename(screenshotPath)}`);
+        robotState.setScreenshot(screenshotFilename); // Apenas o nome do arquivo
     } finally {
         if (browser.isConnected()) {
             await browser.close();
@@ -146,10 +148,11 @@ export async function processConversation(payload: { locationId: string; convers
         const errorMessage = isTimeout ? "Timeout: A chamada para o anexo não foi detectada a tempo." : `ERRO inesperado: ${error.message}`;
         robotState.addLog(errorMessage, 'ERROR');
         
-        const screenshotPath = path.join(SCREENSHOTS_DIR, `processing_error_${Date.now()}.png`);
+        const screenshotFilename = `processing_error_${Date.now()}.png`;
+        const screenshotPath = path.join(SCREENSHOTS_DIR, screenshotFilename);
         try {
             await page.screenshot({ path: screenshotPath });
-            robotState.setScreenshot(`/screenshots/${path.basename(screenshotPath)}`);
+            robotState.setScreenshot(screenshotFilename); // Apenas o nome do arquivo
         } catch (screenshotError) {
             robotState.addLog(`Falha ao tirar screenshot: ${(screenshotError as Error).message}`, 'ERROR');
         }

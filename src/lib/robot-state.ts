@@ -1,4 +1,5 @@
 import path from 'path';
+import os from 'os';
 import fs from 'fs/promises';
 
 export type RobotStatus = "STOPPED" | "LOGGING_IN" | "AWAITING_2FA" | "RUNNING" | "PROCESSING" | "ERROR";
@@ -20,11 +21,11 @@ export type RobotState = {
   logs: LogEntry[];
   config: RobotConfig | null;
   lastError: string | null;
-  screenshot: string | null; // Path to screenshot
+  screenshot: string | null; // Apenas o nome do arquivo da captura de tela (ex: error.png)
 };
 
 const MAX_LOGS = 100;
-export const SESSION_FILE_PATH = path.join(process.cwd(), 'temp', 'ghl_session_state.json');
+export const SESSION_FILE_PATH = path.join(os.tmpdir(), 'ghl_session_state.json');
 
 // This in-memory store works because Node.js modules are cached, creating a singleton-like behavior
 // within a single server instance.
@@ -88,10 +89,10 @@ export const robotState = {
     addLog(`Status alterado para: ${status}`);
   },
   
-  setScreenshot: (path: string | null) => {
-    state.screenshot = path;
-    if(path) {
-        addLog(`Captura de tela salva em: ${path}`);
+  setScreenshot: (filename: string | null) => {
+    state.screenshot = filename;
+    if(filename) {
+        addLog(`Captura de tela salva como: ${filename}`);
     }
   },
 
