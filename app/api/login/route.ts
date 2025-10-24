@@ -1,3 +1,4 @@
+
 import { NextResponse } from 'next/server';
 import { performInitialLogin, addLog } from '@/lib/services/ghl-service';
 import { setLoginState, resetLoginFlow } from '@/lib/services/login-state-service';
@@ -25,7 +26,7 @@ export async function POST() {
 
     // Perform login in non-headless mode to allow for 2FA interaction.
     // Do not await, as this will be a long-running process waiting for user input.
-    performInitialLogin(false).catch(error => {
+    performInitialLogin().catch(error => {
       addLog(`[ERROR] Uncaught error in background login process: ${error.message}`);
       setLoginState('Failed', error.message);
     });
