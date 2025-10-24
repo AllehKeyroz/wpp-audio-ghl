@@ -277,6 +277,13 @@ export default function HomePage() {
     <div className="bg-gray-900 text-white min-h-screen font-sans">
         {loginFlowState === 'AwaitingOTP' && <OtpModal onSubmit={handleOtpSubmit} onResendOtp={handleResendOtp} isLoading={isLoading.otp || false} />}
       <main className="max-w-7xl mx-auto p-4 sm:p-6 lg:p-8">
+        
+        {statusMessage.message && (
+          <div className={`p-4 mb-6 rounded-md text-sm ${statusMessage.type === 'success' ? 'bg-green-900 text-green-200' : 'bg-red-900 text-red-200'}`}>
+            {statusMessage.message}
+          </div>
+        )}
+
         <header className="mb-8">
           <h1 className="text-4xl font-bold text-cyan-400">GHL Encaminhador de Anexos</h1>
           <p className="text-gray-400 mt-2">Uma interface web para gerenciar o robô de encaminhamento de anexos do GoHighLevel.</p>

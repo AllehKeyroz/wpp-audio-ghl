@@ -1,7 +1,7 @@
 
 import { chromium, Page } from 'playwright';
 import path from 'path';
-import { setLoginState, getLoginState, retrieveOtp } from './login-state-service';
+import { setLoginState, getLoginState, retrieveOtp, setPageForResend } from './login-state-service';
 import { getDb, type Config as DbConfig, saveConfig as dbSaveConfig, saveSession, deleteSession as dbDeleteSession } from './db-service';
 
 // --- Type Definitions ---
@@ -96,7 +96,7 @@ export async function performInitialLogin(email: string): Promise<void> {
   }
 
   addLog(`Launching browser for initial login for ${email}...`);
-  const browser = await chromium.launch({ headless: false }); 
+  const browser = await chromium.launch({ headless: true }); 
   const context = await browser.newContext();
   const page = await context.newPage();
 
@@ -135,8 +135,9 @@ export async function performInitialLogin(email: string): Promise<void> {
     } else if (navigationResponse === 'otp') {
         addLog('2FA is required. Waiting for OTP from user via web UI.');
         setLoginState(email, 'AwaitingOTP');
+        setPageForResend(email, page); // Store the page object for resend
 
-        const otp = await retrieveOtp(email);
+        const otp = await retrieveOtp(email); // This promise now waits for the UI
         if (!otp) {
             throw new Error('OTP not provided in time.');
         }
@@ -165,7 +166,7 @@ export async function performInitialLogin(email: string): Promise<void> {
 
   } catch (error: any) {
     const errorMsg = error.message || 'An unknown error occurred during login.';
-    addLog(`Error during login process for ${email}: ${errorMsg}`);
+    addLog(`[ERROR] Error during login process for ${email}: ${error.toString()}`);
     setLoginState(email, 'Failed', errorMsg);
   } finally {
     addLog('Closing browser.');
@@ -174,7 +175,21 @@ export async function performInitialLogin(email: string): Promise<void> {
 }
 
 export async function resendOtp(email: string): Promise<void> {
-  addLog(`[WARN] OTP Resend is not yet supported for ${email}. Please restart the login process.`);
+    const userState = getLoginState(email);
+    if (!userState.page) {
+        addLog(`[ERROR] Cannot resend OTP for ${email}: Page context not found.`);
+        throw new Error("Page context not found. Please restart the login process.");
+    }
+    try {
+        addLog(`Attempting to resend OTP for ${email}...`);
+        // Assuming there's a button/link with text "Resend" or similar
+        const resendButton = await userState.page.waitForSelector('text=/Resend|Re-send|Reenviar/', { timeout: 5000 });
+        await resendButton.click();
+        addLog(`"Resend OTP" button clicked for ${email}.`);
+    } catch (error) {
+        addLog(`[ERROR] Could not find or click the resend OTP button for ${email}: ${error}`);
+        throw new Error("Failed to find or click the resend OTP button.");
+    }
 }
 
 

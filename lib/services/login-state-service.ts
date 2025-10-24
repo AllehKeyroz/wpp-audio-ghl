@@ -1,3 +1,5 @@
+import type { Page } from 'playwright';
+
 // This service manages the state of interactive login processes for multiple users.
 // It's a simple in-memory store, meaning the state will be reset if the server restarts.
 
@@ -10,6 +12,7 @@ interface UserState {
     resolve: (otp: string) => void;
     reject: (reason?: any) => void;
   } | null;
+  page: Page | null; // To hold the page object for OTP resend
 }
 
 // In-memory store for user login states, keyed by email.
@@ -19,11 +22,13 @@ const getInitialState = (): UserState => ({
     flowState: 'Idle',
     errorMessage: null,
     otpPromise: null,
+    page: null,
 });
 
 export const getLoginState = (email: string) => {
   const userState = userStates.get(email) || getInitialState();
-  return { flowState: userState.flowState, errorMessage: userState.errorMessage };
+  // Don't return the page object to the client
+  return { flowState: userState.flowState, errorMessage: userState.errorMessage, page: userState.page };
 };
 
 export const setLoginState = (email: string, newState: LoginFlowState, errorMessage: string | null = null) => {
@@ -36,9 +41,20 @@ export const setLoginState = (email: string, newState: LoginFlowState, errorMess
       userState.otpPromise.reject('Login state changed.');
       userState.otpPromise = null;
   }
+
+  // Clear page object when flow is not in OTP state
+  if (newState !== 'AwaitingOTP') {
+      userState.page = null;
+  }
   
   userStates.set(email, userState);
 };
+
+export const setPageForResend = (email: string, page: Page) => {
+    const userState = userStates.get(email) || getInitialState();
+    userState.page = page;
+    userStates.set(email, userState);
+}
 
 export const submitOtp = (email: string, otp: string): boolean => {
   const userState = userStates.get(email);
@@ -73,5 +89,9 @@ export const retrieveOtp = (email: string): Promise<string> => {
 };
 
 export const resetLoginFlow = (email: string) => {
+    const userState = userStates.get(email);
+    if (userState?.page && !userState.page.isClosed()) {
+        userState.page.close().catch(() => {});
+    }
     userStates.delete(email);
 }
