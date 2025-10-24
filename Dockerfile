@@ -11,9 +11,10 @@ RUN apk add --no-cache chromium
 WORKDIR /app
 
 # Copia os arquivos de definição de dependência
+# Usamos * para package-lock.json para funcionar com npm, pnpm, ou yarn
 COPY package.json package-lock.json* ./
 
-# Instala as dependências de forma limpa
+# Instala as dependências de forma "limpa" a partir do lockfile
 RUN npm ci
 
 # Instala os binários do navegador para o Playwright sem dependências de sistema (já instaladas com apk)
@@ -37,17 +38,16 @@ RUN addgroup -g 1001 -S nodejs
 RUN adduser -S nextjs -u 1001
 
 # Copia as dependências do Playwright instaladas na fase de build
-# Isso garante que o navegador esteja disponível para o runner
 COPY --from=build /ms-playwright/ /ms-playwright/
 
-# Copia os artefatos de build da fase anterior
+# Copia os arquivos de build da fase anterior
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/public ./public
 
 # Define as permissões corretas para os diretórios
-# O usuário 'nextjs' precisa ter permissão para escrever no diretório temporário e nos logs
+# O usuário 'nextjs' precisa ter permissão para escrever no diretório temporário
 RUN mkdir -p /tmp/ghl-robot-screenshots && \
     chown -R nextjs:nodejs /tmp/ghl-robot-screenshots && \
     chown -R nextjs:nodejs ./.next
