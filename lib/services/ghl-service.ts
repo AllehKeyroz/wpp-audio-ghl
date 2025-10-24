@@ -1,3 +1,4 @@
+
 import { chromium, Page } from 'playwright';
 import path from 'path';
 import fs from 'fs/promises';
@@ -31,6 +32,7 @@ export async function getConfig(): Promise<Config> {
     return JSON.parse(data);
   } catch (error) {
     console.error('Error reading config file:', error);
+    // Return default values if config doesn't exist
     return { loginUrl: 'https://app.gohighlevel.com/', ghlEmail: '', ghlPassword: '', targetWebhook: '' };
   }
 }
@@ -43,8 +45,10 @@ export async function saveConfig(config: Config): Promise<void> {
 let logs: string[] = [];
 export const addLog = (message: string) => {
   const timestamp = new Date().toISOString();
-  logs.push(`${timestamp}: ${message}`);
-  if (logs.length > 100) logs.shift();
+  const logMessage = `${timestamp}: ${message}`;
+  console.log(logMessage); // Also log to console for container logs
+  logs.push(logMessage);
+  if (logs.length > 200) logs.shift(); // Keep last 200 logs
 };
 export const getLogs = () => logs;
 export const clearLogs = () => { logs = []; };
@@ -52,201 +56,153 @@ export const clearLogs = () => { logs = []; };
 // --- Core Playwright Logic ---
 
 /**
- * Checks if the current session state is valid.
+ * Checks if the current session state is valid by trying to access a protected page.
  */
 export async function checkSessionStatus(): Promise<SessionStatus> {
     addLog('Checking session status...');
-    addLog(`Session file path: ${SESSION_PATH}`);
+    addLog(`Session file path being checked: ${SESSION_PATH}`);
     try {
         await fs.access(SESSION_PATH);
         addLog('Session file found.');
     } catch (e: any) {
-        addLog(`Session file not found at ${SESSION_PATH}. Error: ${e.message}`);
+        addLog(`Session file not found. Error: ${e.message}`);
         return 'Not Found';
     }
 
     const config = await getConfig();
-    const browser = await chromium.launch({ headless: true }); // Revert to headless for background check
+    const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ storageState: SESSION_PATH });
     const page = await context.newPage();
 
     try {
-        addLog(`Navigating to ${config.loginUrl} to check status.`);
-        await page.goto(config.loginUrl, { waitUntil: 'load', timeout: 15000 });
+        const agencyDashboardUrl = new URL('/v2/dashboard', config.loginUrl).href;
+        addLog(`Navigating to ${agencyDashboardUrl} to check status.`);
+        await page.goto(agencyDashboardUrl, { waitUntil: 'load', timeout: 20000 });
 
-        // After loading, check if the URL indicates an active session.
-        if (page.url().includes('agency_dashboard') || page.url().includes('v2/location')) {
-            addLog('Session is active.');
+        const currentUrl = page.url();
+        addLog(`Landed on URL: ${currentUrl}`);
+
+        // If we are on any agency or location page, the session is active.
+        if (currentUrl.includes('/v2/')) {
+            addLog('Session appears to be active.');
             return 'Active';
         } else {
-            addLog('Session is expired. Redirected to login page or not on dashboard.');
+            addLog('Session is expired or invalid. Not on a protected v2 URL.');
             return 'Expired';
         }
-    } catch (error) {
-        addLog(`Error checking session status: ${error}`);
-        return 'Expired'; // Assume expired on error
+    } catch (error: any) {
+        addLog(`Error checking session status during navigation: ${error.message}`);
+        return 'Expired'; // Assume expired on any navigation or timeout error
     } finally {
         await browser.close();
     }
 }
 
-export async function performInitialLogin(headless: boolean = false): Promise<void> {
+
+export async function performInitialLogin(): Promise<void> {
   addLog('Attempting initial login...');
-  addLog(`Current working directory: ${process.cwd()}`);
-  addLog(`Session file path: ${SESSION_PATH}`);
-
-  // Diagnostic: Try writing a dummy file to check permissions
-  const dummyFilePath = path.join(process.cwd(), 'gemini_dummy_test.txt');
-  try {
-    await fs.writeFile(dummyFilePath, 'This is a test file from Gemini.', 'utf-8');
-    addLog(`Diagnostic: Successfully wrote dummy file to ${dummyFilePath}`);
-    await fs.unlink(dummyFilePath); // Clean up dummy file
-    addLog(`Diagnostic: Successfully deleted dummy file.`);
-  } catch (dummyError: any) {
-    addLog(`Diagnostic: Failed to write dummy file to ${dummyFilePath}. This might indicate a permissions issue. Error: ${dummyError.message}`);
-  }
-
+  
   setLoginState('InProgress');
   const config = await getConfig();
   if (!config.ghlEmail || !config.ghlPassword || !config.loginUrl) {
-    setLoginState('Failed', 'Login URL, Email or Password not configured.');
-    addLog('Error: Login URL, Email or Password not configured.');
-    throw new Error('Login URL, Email or Password not configured.');
+    const errorMsg = 'Login URL, Email or Password not configured.';
+    setLoginState('Failed', errorMsg);
+    addLog(`Error: ${errorMsg}`);
+    throw new Error(errorMsg);
   }
 
-  addLog('Launching browser...');
-  const browser = await chromium.launch({ headless: false }); // Always non-headless for initial login
+  addLog('Launching browser for initial login...');
+  // Headless must be false for user to interact with 2FA
+  const browser = await chromium.launch({ headless: false }); 
   const context = await browser.newContext();
   const page = await context.newPage();
 
   try {
     addLog(`Navigating to login page: ${config.loginUrl}`);
-    await page.goto(config.loginUrl);
+    await page.goto(config.loginUrl, { waitUntil: 'load' });
 
-    const origin = new URL(config.loginUrl).origin;
-    const dashboardUrlPattern = `${origin}/v2/dashboard`;
-
+    // Check if already logged in (e.g., from a previous run where the browser didn't close)
     try {
-      addLog('Checking if already logged in...');
-      await page.waitForURL((url) => url.href.startsWith(dashboardUrlPattern), { timeout: 5000 });
+      addLog('Checking if already logged in by waiting for dashboard URL...');
+      await page.waitForURL(url => url.href.includes('/v2/'), { timeout: 5000 });
       addLog('Already logged in. Saving session state.');
       await context.storageState({ path: SESSION_PATH });
       setLoginState('Complete');
-      // await browser.close(); // Keep browser open for inspection
-      addLog('Login complete. Browser kept open for inspection.');
+      addLog('Login process complete (already logged in). Browser will close shortly.');
+      // Wait a bit before closing so user can see the message
+      await page.waitForTimeout(5000); 
       return;
     } catch (e) {
-      addLog('Not logged in. Proceeding with login form.');
+      addLog('Not logged in yet. Proceeding with login form.');
     }
 
     addLog('Filling email and password...');
     await page.fill('input[name="email"]', config.ghlEmail);
     await page.fill('input[name="password"]', config.ghlPassword);
     await page.click('button[type="submit"]');
-    addLog('Email and password submitted. Waiting for 2FA elements to appear.');
-    const sendSecurityCodeButtonSelector = '#app > div > div:nth-child(1) > div.flex.v2-open.sidebar-v2-agency > section > div.hl_login--body > div > div > div > div.mt-4 > div > button';
-    addLog(`Waiting for button with selector: ${sendSecurityCodeButtonSelector}`);
-    await page.waitForSelector(sendSecurityCodeButtonSelector, { state: 'visible' });
-    addLog('2FA elements appeared. Clicking Send Security Code button.');
-    await page.click(sendSecurityCodeButtonSelector);
-    addLog('Security code sent. Waiting for OTP from user.');
-    setLoginState('AwaitingOTP');
+    addLog('Credentials submitted.');
 
-    // Wait for the OTP to be submitted from the frontend
-    let otp: string | null = null;
-    for (let i = 0; i < 600; i++) { // 10 minute timeout
-        if (getLoginState().flowState === 'SubmittingOTP') {
-            otp = retrieveOtp();
-            break;
+    // Wait for either the dashboard (no 2FA) or the 2FA page
+    addLog('Waiting for navigation to either dashboard or 2FA page...');
+    const navigationResponse = await Promise.race([
+        page.waitForURL(url => url.href.includes('/v2/'), { timeout: 30000 }).then(() => 'dashboard'),
+        page.waitForSelector('input.otp-input', { timeout: 30000 }).then(() => 'otp'),
+    ]);
+    
+    if (navigationResponse === 'dashboard') {
+        addLog('Login successful without 2FA. Navigated to dashboard.');
+    } else if (navigationResponse === 'otp') {
+        addLog('2FA is required. Waiting for OTP from user via web UI.');
+        setLoginState('AwaitingOTP');
+
+        // Wait for the OTP to be submitted from the frontend
+        const otp = await retrieveOtp();
+        if (!otp) {
+            throw new Error('OTP not provided in time.');
         }
-        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        addLog('OTP received from UI. Submitting...');
+        const otpInputs = await page.$$('input.otp-input');
+        if (otpInputs.length === 0) throw new Error('OTP input fields not found on the page.');
+        
+        for (let i = 0; i < otp.length; i++) {
+            if (otpInputs[i]) await otpInputs[i].fill(otp[i]);
+        }
+
+        addLog('OTP filled. Waiting for successful login navigation...');
+        await page.waitForURL(url => url.href.includes('/v2/'), { timeout: 30000 });
+        addLog('Successfully logged in with OTP and navigated to dashboard.');
     }
 
-    if (!otp) {
-        setLoginState('Failed', 'OTP not provided in time.');
-        addLog('Error: OTP not provided in time.');
-        // Don't throw, let the browser stay open for inspection
-        return;
-    }
+    addLog('Waiting a moment for session to stabilize...');
+    await page.waitForTimeout(5000);
 
-    addLog('OTP received. Submitting...');
-    const otpInputs = await page.$$('input.otp-input');
-    if (otpInputs.length === 0) {
-        throw new Error('OTP input fields not found.');
-    }
-    for (let i = 0; i < otp.length; i++) {
-        await otpInputs[i].fill(otp[i]);
-    }
-    addLog('OTP filled. Waiting for dashboard URL...');
-    await page.waitForURL((url) => url.href.includes('agency_dashboard') || url.href.includes('v2/location'), { timeout: 30000 });
-    addLog('Successfully logged in and navigated to dashboard.');
-    addLog('Waiting 15 seconds for session to stabilize...');
-    await new Promise(resolve => setTimeout(resolve, 15000)); // Wait for 15 seconds
+    addLog('Saving session state to file...');
+    await context.storageState({ path: SESSION_PATH });
+    await fs.access(SESSION_PATH); // Verify file exists
+    addLog('Session state saved and verified successfully.');
+    setLoginState('Complete');
 
-    addLog('Attempting to save session state to file...');
-    try {
-      await context.storageState({ path: SESSION_PATH });
-      addLog('Playwright reported session state saved. Verifying file existence...');
-      await fs.access(SESSION_PATH); // Verify immediately after saving
-      addLog('Session file confirmed to exist after saving.');
-      setLoginState('Complete');
-      addLog('Login complete. You can now close the browser window.');
-    } catch (saveError: any) {
-      addLog(`Error saving session state or verifying file: ${saveError.message}`);
-      setLoginState('Failed', `Error saving session: ${saveError.message}`);
-    }
-
-  } catch (error) {
-    addLog(`Error during login: ${error}`);
-    setLoginState('Failed', error instanceof Error ? error.message : 'Unknown error');
-    // Don't re-throw, just log and let the user see the browser state
+  } catch (error: any) {
+    const errorMsg = error.message || 'An unknown error occurred during login.';
+    addLog(`Error during login process: ${errorMsg}`);
+    setLoginState('Failed', errorMsg);
+    // Don't re-throw, let finally block handle browser closing
+  } finally {
+    addLog('Closing browser.');
+    await browser.close();
   }
 }
 
 export async function resendOtp(): Promise<void> {
-  addLog('Attempting to resend OTP...');
-  // setLoginState('InProgress'); // Indicate that a login-related process is ongoing
-
-  const config = await getConfig();
-  if (!config.loginUrl) {
-    addLog('Error: Login URL not configured for OTP resend.');
-    throw new Error('Login URL not configured.');
-  }
-
-  // Ensure session file exists before trying to load it
-  try {
-    await fs.access(SESSION_PATH);
-  } catch (e) {
-    addLog('Session file not found. Cannot resend OTP without an active session.');
-    setLoginState('Failed', 'Session file not found. Please perform initial login.');
-    throw new Error('Session file not found.');
-  }
-
-  const browser = await chromium.launch({ headless: false }); // Visible browser for interactive resend
-  const context = await browser.newContext({ storageState: SESSION_PATH });
-  const page = await context.newPage();
-
-  try {
-    addLog(`Navigating to login page (${config.loginUrl}) to resend OTP.`);
-    await page.goto(config.loginUrl, { waitUntil: 'load', timeout: 15000 });
-
-    const resendButtonSelector = 'div.w-full.font-semibold.text-center.cursor-pointer.text-curious-blue-500:has-text("If you did not receive the code click here to resend")';
-    addLog(`Waiting for resend button with selector: ${resendButtonSelector}`);
-    await page.waitForSelector(resendButtonSelector, { state: 'visible', timeout: 30000 });
-    addLog('Resend button appeared. Clicking to resend OTP.');
-    await page.click(resendButtonSelector);
-    addLog('Resend OTP button clicked. Waiting for OTP from user again.');
-    setLoginState('AwaitingOTP'); // Go back to awaiting OTP state
-
-  } catch (error) {
-    addLog(`Error during OTP resend: ${error}`);
-    setLoginState('Failed', error instanceof Error ? error.message : 'Unknown error during OTP resend');
-    throw error;
-  } finally {
-    // Do not close browser immediately, let user inspect if needed
-    addLog('OTP resend process finished. Browser kept open for inspection.');
-  }
+  // This function is problematic in a headless/automated context
+  // as it requires access to the specific page instance that is asking for OTP.
+  // The current architecture with a new browser per action makes this difficult.
+  // For now, we will log that this is not supported.
+  addLog('[WARN] OTP Resend is not supported in the current architecture. Please restart the login process.');
+  // A potential implementation would require a long-lived browser instance managed by the server.
 }
+
 
 export async function processAndForwardAttachment(payload: WebhookPayload): Promise<void> {
   const { locationId, conversationId, messageId } = payload;
@@ -263,11 +219,8 @@ export async function processAndForwardAttachment(payload: WebhookPayload): Prom
     throw new Error('Session file not found. Please perform the initial login first.');
   }
 
-  const context = await chromium.launchPersistentContext('', {
-    headless: true,
-    storageState: SESSION_PATH,
-  });
-
+  const browser = await chromium.launch({ headless: true });
+  const context = await browser.newContext({ storageState: SESSION_PATH });
   const page = await context.newPage();
 
   try {
@@ -279,9 +232,12 @@ export async function processAndForwardAttachment(payload: WebhookPayload): Prom
     addLog(`Setting up intercept for URL pattern: ${attachmentUrlPattern}`);
 
     const responsePromise = page.waitForResponse(attachmentUrlPattern, { timeout: 45000 });
+    
     await page.goto(conversationUrl, { waitUntil: 'domcontentloaded' });
+    
+    addLog('Page navigation initiated. Waiting for attachment response...');
     const response = await responsePromise;
-    addLog(`Intercepted attachment response: ${response.url()}`);
+    addLog(`Intercepted attachment response from: ${response.url()}`);
 
     if (response.ok()) {
       const body = await response.body();
@@ -296,7 +252,7 @@ export async function processAndForwardAttachment(payload: WebhookPayload): Prom
         data: base64Body,
       };
 
-      addLog(`Forwarding attachment to: ${config.targetWebhook}`);
+      addLog(`Forwarding attachment to target webhook: ${config.targetWebhook}`);
       const forwardResponse = await fetch(config.targetWebhook, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -304,18 +260,27 @@ export async function processAndForwardAttachment(payload: WebhookPayload): Prom
       });
 
       if (forwardResponse.ok) {
-        addLog('Successfully forwarded attachment.');
+        addLog(`Successfully forwarded attachment for messageId: ${messageId}.`);
       } else {
         const errorBody = await forwardResponse.text();
-        throw new Error(`Failed to forward attachment. Status: ${forwardResponse.status}. Body: ${errorBody}`);
+        throw new Error(`Failed to forward attachment. Target server responded with status: ${forwardResponse.status}. Body: ${errorBody}`);
       }
     } else {
-      throw new Error(`Failed to fetch attachment. Status: ${response.status()}`);
+      throw new Error(`Failed to fetch attachment from GHL. Status: ${response.status()}`);
     }
-  } catch (error) {
-    addLog(`Error during processing: ${error}`);
-    throw error;
+  } catch (error: any) {
+    addLog(`[ERROR] Error during attachment processing: ${error.message}`);
+    // Capture a screenshot for debugging if something went wrong
+    try {
+        const screenshotPath = path.join('/tmp', `error_${messageId}_${Date.now()}.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        addLog(`Screenshot saved to ${screenshotPath} for debugging.`);
+    } catch (ssError: any) {
+        addLog(`[ERROR] Could not take a screenshot: ${ssError.message}`);
+    }
+    throw error; // Re-throw the original error
   } finally {
-    await context.close();
+    addLog('Closing browser context for attachment processing.');
+    await browser.close();
   }
 }
