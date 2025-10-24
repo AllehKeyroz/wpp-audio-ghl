@@ -1,7 +1,7 @@
 import path from 'path';
 import fs from 'fs/promises';
 
-export type RobotStatus = "STOPPED" | "LOGGING_IN" | "RUNNING" | "PROCESSING" | "ERROR";
+export type RobotStatus = "STOPPED" | "LOGGING_IN" | "AWAITING_2FA" | "RUNNING" | "PROCESSING" | "ERROR";
 
 export type RobotConfig = {
   email: string;

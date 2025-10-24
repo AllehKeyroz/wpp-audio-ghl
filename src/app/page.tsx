@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -14,6 +14,14 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Form,
   FormControl,
@@ -37,7 +45,8 @@ import {
   CheckCircle2,
   XCircle,
   Power,
-  ExternalLink
+  ExternalLink,
+  KeyRound
 } from "lucide-react";
 import type { RobotState } from "@/lib/robot-state";
 import Image from "next/image";
@@ -48,15 +57,22 @@ const formSchema = z.object({
   targetWebhook: z.string().url({ message: "Por favor, insira uma URL válida." }),
 });
 
+const twoFaSchema = z.object({
+  code: z.string().min(6, { message: "O código deve ter pelo menos 6 dígitos." }),
+});
+
 type FormData = z.infer<typeof formSchema>;
+type TwoFaFormData = z.infer<typeof twoFaSchema>;
 
 const statusConfig = {
   STOPPED: { text: "Parado", color: "bg-gray-500", icon: <Power className="h-4 w-4" /> },
   LOGGING_IN: { text: "Iniciando Login...", color: "bg-blue-500", icon: <Loader2 className="h-4 w-4 animate-spin" /> },
+  AWAITING_2FA: { text: "Aguardando 2FA", color: "bg-yellow-500", icon: <KeyRound className="h-4 w-4" /> },
   RUNNING: { text: "Ativo", color: "bg-green-500", icon: <CheckCircle2 className="h-4 w-4" /> },
-  PROCESSING: { text: "Processando", color: "bg-yellow-500", icon: <Loader2 className="h-4 w-4 animate-spin" /> },
+  PROCESSING: { text: "Processando", color: "bg-purple-500", icon: <Loader2 className="h-4 w-4 animate-spin" /> },
   ERROR: { text: "Erro", color: "bg-red-500", icon: <XCircle className="h-4 w-4" /> },
 };
+
 
 export default function GhlRobotDashboard() {
   const [state, setState] = useState<RobotState>({
@@ -67,8 +83,10 @@ export default function GhlRobotDashboard() {
     screenshot: null,
   });
   const [isPending, startTransition] = useTransition();
+  const [is2faPending, start2faTransition] = useTransition();
   const [webhookUrl, setWebhookUrl] = useState("");
   const { toast } = useToast();
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const form = useForm<FormData>({
     resolver: zodResolver(formSchema),
@@ -79,20 +97,42 @@ export default function GhlRobotDashboard() {
     },
   });
 
+  const twoFaForm = useForm<TwoFaFormData>({
+    resolver: zodResolver(twoFaSchema),
+    defaultValues: {
+      code: "",
+    },
+  });
+
+  const fetchStatus = () => {
+    fetch("/api/robot/status")
+      .then((res) => res.json())
+      .then((data) => setState(data))
+      .catch(err => console.error("Failed to fetch status:", err));
+  };
+
   useEffect(() => {
     setWebhookUrl(`${window.location.origin}/api/webhook-handler`);
   }, []);
 
   useEffect(() => {
-    if (state.status === "RUNNING" || state.status === "LOGGING_IN" || state.status === "ERROR") {
-      const interval = setInterval(() => {
-        fetch("/api/robot/status")
-          .then((res) => res.json())
-          .then((data) => setState(data));
-      }, 3000);
-      return () => clearInterval(interval);
+    const shouldPoll = ["LOGGING_IN", "AWAITING_2FA", "RUNNING", "PROCESSING", "ERROR"].includes(state.status);
+    
+    if (shouldPoll && !pollingIntervalRef.current) {
+      fetchStatus(); // Fetch immediately
+      pollingIntervalRef.current = setInterval(fetchStatus, 3000);
+    } else if (!shouldPoll && pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
     }
+    
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+      }
+    };
   }, [state.status]);
+
 
   const handleStart = (data: FormData) => {
     startTransition(async () => {
@@ -151,6 +191,36 @@ export default function GhlRobotDashboard() {
       }
     });
   };
+  
+  const handle2faSubmit = (data: TwoFaFormData) => {
+    start2faTransition(async () => {
+       try {
+        const response = await fetch("/api/robot/start", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: data.code }),
+        });
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Falha ao enviar código 2FA.");
+        }
+        toast({
+          title: "Código Enviado",
+          description: "Continuando processo de login...",
+        });
+        twoFaForm.reset();
+        // The status will be updated via polling
+        fetchStatus();
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
+        toast({
+          variant: "destructive",
+          title: "Erro no 2FA",
+          description: errorMessage,
+        });
+      }
+    });
+  }
 
   const copyToClipboard = () => {
     navigator.clipboard.writeText(webhookUrl);
@@ -160,7 +230,7 @@ export default function GhlRobotDashboard() {
     });
   };
 
-  const isRunning = state.status === "RUNNING" || state.status === "LOGGING_IN";
+  const isInteractive = state.status === "RUNNING" || state.status === "LOGGING_IN" || state.status === "AWAITING_2FA" || state.status === "PROCESSING";
   const currentStatus = statusConfig[state.status] || statusConfig.STOPPED;
 
   return (
@@ -195,7 +265,7 @@ export default function GhlRobotDashboard() {
                         <FormItem>
                           <FormLabel>E-mail GHL</FormLabel>
                           <FormControl>
-                            <Input placeholder="seu.email@exemplo.com" {...field} disabled={isRunning} />
+                            <Input placeholder="seu.email@exemplo.com" {...field} disabled={isInteractive} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -208,7 +278,7 @@ export default function GhlRobotDashboard() {
                         <FormItem>
                           <FormLabel>Senha GHL</FormLabel>
                           <FormControl>
-                            <Input type="password" placeholder="********" {...field} disabled={isRunning} />
+                            <Input type="password" placeholder="********" {...field} disabled={isInteractive} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -221,7 +291,7 @@ export default function GhlRobotDashboard() {
                         <FormItem>
                           <FormLabel>Webhook de Destino</FormLabel>
                           <FormControl>
-                            <Input placeholder="https://seu-webhook.com/..." {...field} disabled={isRunning} />
+                            <Input placeholder="https://seu-webhook.com/..." {...field} disabled={isInteractive} />
                           </FormControl>
                           <FormMessage />
                         </FormItem>
@@ -229,12 +299,12 @@ export default function GhlRobotDashboard() {
                     />
                   </CardContent>
                   <CardFooter className="flex justify-between">
-                    <Button type="submit" disabled={isPending || isRunning}>
+                    <Button type="submit" disabled={isPending || isInteractive}>
                       {isPending && state.status !== 'RUNNING' ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Play className="mr-2 h-4 w-4" />}
                       Iniciar Robô
                     </Button>
-                    <Button type="button" variant="destructive" onClick={handleStop} disabled={isPending || !isRunning}>
-                       {isPending && isRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <StopCircle className="mr-2 h-4 w-4" />}
+                    <Button type="button" variant="destructive" onClick={handleStop} disabled={isPending || !isInteractive}>
+                       {isPending && isInteractive ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <StopCircle className="mr-2 h-4 w-4" />}
                       Parar Robô
                     </Button>
                   </CardFooter>
@@ -316,6 +386,45 @@ export default function GhlRobotDashboard() {
           </div>
         </div>
       </div>
+      
+      <Dialog open={state.status === "AWAITING_2FA"}>
+        <DialogContent className="sm:max-w-[425px]">
+          <Form {...twoFaForm}>
+            <form onSubmit={twoFaForm.handleSubmit(handle2faSubmit)}>
+              <DialogHeader>
+                <DialogTitle>Verificação de Segurança</DialogTitle>
+                <DialogDescription>
+                  Um código de autenticação foi solicitado. Verifique seu e-mail ou app de autenticação e insira o código abaixo.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-4 py-4">
+                 <FormField
+                    control={twoFaForm.control}
+                    name="code"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel htmlFor="code" className="text-right">
+                          Código de 6 dígitos
+                        </FormLabel>
+                        <FormControl>
+                          <Input id="code" {...field} className="col-span-3" />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+              </div>
+              <DialogFooter>
+                <Button type="submit" disabled={is2faPending}>
+                   {is2faPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                  Enviar Código
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
     </main>
   );
 }

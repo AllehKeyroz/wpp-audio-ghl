@@ -3,8 +3,6 @@ import path from 'path';
 import { chromium, type Page, TimeoutError as PlaywrightTimeoutError } from "playwright";
 import { robotState, SESSION_FILE_PATH, type RobotConfig } from "./robot-state";
 import fs from 'fs/promises';
-import { Readable } from 'stream';
-import { finished } from 'stream/promises';
 
 const SCREENSHOTS_DIR = path.join(process.cwd(), 'public', 'screenshots');
 mkdirpSync(SCREENSHOTS_DIR);
@@ -27,7 +25,7 @@ export async function performLogin(config: RobotConfig, getAuthCode: () => Promi
         return;
     }
 
-    const browser = await chromium.launch({ headless: false, slowMo: 100 });
+    const browser = await chromium.launch({ headless: true, slowMo: 50, args: ["--no-sandbox"] });
     const context = await browser.newContext();
     const page = await context.newPage();
 
@@ -44,11 +42,13 @@ export async function performLogin(config: RobotConfig, getAuthCode: () => Promi
             page.locator('button[type="submit"]').click(),
         ]);
         
-        if (page.url().includes("/verify")) {
+        const is2faRequired = await page.locator('input[placeholder*="authentication code"]').isVisible({ timeout: 5000 });
+
+        if (is2faRequired) {
             robotState.addLog("Autenticação de dois fatores necessária.");
-            const code = await getAuthCode(); // This will need a mechanism to get code from user. For now, it's a placeholder.
+            const code = await getAuthCode(); 
             robotState.addLog("Código de autenticação recebido, verificando...");
-             await page.locator('input[placeholder="Enter authentication code"]').fill(code.trim());
+             await page.locator('input[placeholder*="authentication code"]').fill(code.trim());
              await Promise.all([
                 page.waitForNavigation({ waitUntil: "load", timeout: 60000 }),
                 page.locator('button:has-text("Verify")').click(),
@@ -56,7 +56,7 @@ export async function performLogin(config: RobotConfig, getAuthCode: () => Promi
         }
         
         robotState.addLog("Aguardando o carregamento do Painel da Agência...");
-        await page.wait_for_selector('text="Painel da Agência"', { timeout: 90000 });
+        await page.waitForSelector('text="Painel da Agência"', { timeout: 90000 });
 
         robotState.addLog("LOGIN BEM-SUCEDIDO! Salvando estado da sessão...");
         await context.storageState({ path: SESSION_FILE_PATH });
@@ -70,7 +70,9 @@ export async function performLogin(config: RobotConfig, getAuthCode: () => Promi
         await page.screenshot({ path: screenshotPath });
         robotState.setScreenshot(`/screenshots/${path.basename(screenshotPath)}`);
     } finally {
-        await browser.close();
+        if (browser.isConnected()) {
+            await browser.close();
+        }
     }
 }
 
@@ -92,7 +94,7 @@ export async function processConversation(payload: { locationId: string; convers
     robotState.addLog(`Iniciando processo para: ConvID=${conversationId}, MsgID=${messageId}`);
 
     const browser = await chromium.launch({ headless: true, args: ["--no-sandbox"] });
-    const context = await browser.newContext({ storage_state: SESSION_FILE_PATH });
+    const context = await browser.newContext({ storageState: SESSION_FILE_PATH });
     const page = await context.newPage();
 
     try {
@@ -103,7 +105,7 @@ export async function processConversation(payload: { locationId: string; convers
         robotState.addLog(`Aguardando resposta de: ${attachmentUrlPattern}`);
 
         const response = await page.waitForResponse(attachmentUrlPattern, async () => {
-             await page.goto(conversationUrl, { wait_until: "networkidle", timeout: 45000 });
+             await page.goto(conversationUrl, { waitUntil: "networkidle", timeout: 45000 });
         }, {timeout: 45000});
 
 
