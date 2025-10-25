@@ -113,6 +113,7 @@ export async function performInitialLogin(email: string): Promise<void> {
       setLoginState(email, 'Complete');
       addLog(`Login process complete for ${email} (already logged in).`);
       await page.waitForTimeout(5000); 
+      await browser.close();
       return;
     } catch (e) {
       addLog('Not logged in yet. Proceeding with login form.');
@@ -124,10 +125,12 @@ export async function performInitialLogin(email: string): Promise<void> {
     await page.click('button[type="submit"]');
     addLog('Credentials submitted.');
 
-    addLog('Waiting for navigation to either dashboard or 2FA page...');
+    addLog('Waiting for navigation to either dashboard, 2FA page, or login failure...');
     const navigationResponse = await Promise.race([
-        page.waitForURL(url => url.href.includes('/v2/'), { timeout: 30000 }).then(() => 'dashboard'),
-        page.waitForSelector('input.otp-input', { timeout: 30000 }).then(() => 'otp'),
+        page.waitForURL(url => url.href.includes('/v2/'), { timeout: 60000 }).then(() => 'dashboard'),
+        page.waitForSelector('input.otp-input', { timeout: 60000 }).then(() => 'otp'),
+        page.waitForSelector('#email', { timeout: 60000 }).then(() => 'login_failed'),
+        page.waitForSelector('#password', { timeout: 60000 }).then(() => 'login_failed')
     ]);
     
     if (navigationResponse === 'dashboard') {
@@ -150,13 +153,15 @@ export async function performInitialLogin(email: string): Promise<void> {
             if (otpInputs[i]) await otpInputs[i].fill(otp[i]);
         }
 
-        addLog('OTP filled. Waiting for successful login navigation...');
+        addLog('OTP filled. The page should now auto-submit. Waiting for successful login navigation...');
         await page.waitForURL(url => url.href.includes('/v2/'), { timeout: 30000 });
         addLog('Successfully logged in with OTP.');
+    } else if (navigationResponse === 'login_failed') {
+        throw new Error('Login failed. Please check your credentials. The login page was displayed again.');
     }
 
     addLog('Waiting a moment for session to stabilize...');
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(15000); // User-requested 15-second wait
 
     addLog('Saving session state to database...');
     const sessionState = await context.storageState();
@@ -167,10 +172,20 @@ export async function performInitialLogin(email: string): Promise<void> {
   } catch (error: any) {
     const errorMsg = error.message || 'An unknown error occurred during login.';
     addLog(`[ERROR] Error during login process for ${email}: ${error.toString()}`);
+     try {
+        const screenshotPath = path.join('/tmp', `error_login_${email.replace(/[^a-zA-Z0-9]/g, '_')}_${Date.now()}.png`);
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        addLog(`Screenshot saved to ${screenshotPath} for debugging.`);
+    } catch (ssError: any) {
+        addLog(`[ERROR] Could not take a screenshot: ${ssError.message}`);
+    }
     setLoginState(email, 'Failed', errorMsg);
+    throw error; // Re-throw the error to be caught by the caller
   } finally {
     addLog('Closing browser.');
-    await browser.close();
+    if (!page.isClosed()) {
+        await browser.close();
+    }
   }
 }
 
@@ -182,7 +197,6 @@ export async function resendOtp(email: string): Promise<void> {
     }
     try {
         addLog(`Attempting to resend OTP for ${email}...`);
-        // Assuming there's a button/link with text "Resend" or similar
         const resendButton = await userState.page.waitForSelector('text=/Resend|Re-send|Reenviar/', { timeout: 5000 });
         await resendButton.click();
         addLog(`"Resend OTP" button clicked for ${email}.`);
@@ -257,7 +271,7 @@ export async function processAndForwardAttachment(payload: WebhookPayload): Prom
   } catch (error: any) {
     addLog(`[ERROR] Error during attachment processing for ${ghlEmail}: ${error.message}`);
     try {
-        const screenshotPath = path.join('/tmp', `error_${messageId}_${Date.now()}.png`);
+        const screenshotPath = path.join('/tmp', `error_forward_${messageId}_${Date.now()}.png`);
         await page.screenshot({ path: screenshotPath, fullPage: true });
         addLog(`Screenshot saved to ${screenshotPath} for debugging.`);
     } catch (ssError: any) {
@@ -269,3 +283,5 @@ export async function processAndForwardAttachment(payload: WebhookPayload): Prom
     await browser.close();
   }
 }
+
+    
